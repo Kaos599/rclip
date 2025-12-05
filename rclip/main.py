@@ -111,6 +111,10 @@ class RClip:
       file=sys.stderr,
     )
 
+    # Initialize indexing workflow: reset all flags, then mark this directory for reindexing
+    self._db.remove_indexing_flag_from_all_images()
+    self._db.flag_images_in_a_dir_as_indexing(directory)
+
     with tqdm(total=None, unit="images") as pbar:
 
       def update_total_images(count: int):
@@ -149,6 +153,8 @@ class RClip:
 
         image = self._db.get_image(filepath=filepath)
         if image and is_image_meta_equal(image, meta):
+          # Image hasn't changed, remove indexing flag to mark it as still present
+          self._db.remove_indexing_flag(filepath, commit=False)
           continue
 
         # Check if this might be a renamed image
@@ -157,29 +163,20 @@ class RClip:
           try:
             img = helpers.read_image(filepath)
             current_hash = helpers.compute_image_hash(img)
-            # Look for images with the same hash (potential renames)
+            # Look for ALL existing images with the same hash
             existing_images_with_hash = self._db.get_images_by_hash(current_hash)
-            if existing_images_with_hash:
-              # Found a match - this is likely a renamed image
-              existing_image = existing_images_with_hash[0]  # Take the first match
-
-              # Mark any existing entries with this hash but different filepath as deleted
-              # (in case there are multiple entries with the same hash)
-              for img in existing_images_with_hash:
-                if img["filepath"] != filepath:
-                  self._db.upsert_image(
-                    db.NewImage(
-                      filepath=img["filepath"],
-                      modified_at=img["modified_at"],
-                      size=img["size"],
-                      vector=img["vector"],
-                      hash=img["hash"],
-                      deleted=True
-                    ),
-                    commit=False,
-                  )
-
-              # Create new entry with updated filepath
+            
+            # Find an entry where the file no longer exists (true rename, not a copy)
+            existing_image = None
+            for img_entry in existing_images_with_hash:
+              if not os.path.exists(img_entry["filepath"]):
+                existing_image = img_entry
+                break
+            
+            if existing_image:
+              # This is a renamed file - reuse the existing vector
+              # DON'T remove the indexing flag from the old filepath - we want it to be marked as deleted
+              # Create a new entry for the new filepath
               self._db.upsert_image(
                 db.NewImage(
                   filepath=filepath,
@@ -207,6 +204,10 @@ class RClip:
       if len(batch) != 0:
         self._index_files(batch, metas)
 
+      # Finalize indexing workflow: mark any remaining indexing=1 entries as deleted
+      # These are files that no longer exist (e.g., old paths of renamed files)
+      self._db.flag_indexing_images_in_a_dir_as_deleted(directory)
+      
       self._db.commit()
       counter_thread.join()
 
