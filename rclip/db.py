@@ -88,7 +88,7 @@ class DB:
       INSERT INTO images(deleted, indexing, filepath, modified_at, size, vector, hash)
       VALUES (:deleted, :indexing, :filepath, :modified_at, :size, :vector, :hash)
       ON CONFLICT(filepath) DO UPDATE SET
-        deleted=:deleted, indexing=:indexing, modified_at=:modified_at, size=:size, vector=:vector, hash=COALESCE(:hash, hash)
+        deleted=:deleted, modified_at=:modified_at, size=:size, vector=:vector, hash=:hash
     """,
       {"deleted": None, "indexing": None, **image},
     )
@@ -127,7 +127,7 @@ class DB:
 
   def get_images_by_hash(self, hash_value: str) -> list[Image]:
     cur = self._con.execute("SELECT * FROM images WHERE hash = ? AND deleted IS NULL", (hash_value,))
-    return cur.fetchall()
+    return [dict(row) for row in cur.fetchall()]
 
   def get_image_vectors_by_dir_path(self, path: str) -> sqlite3.Cursor:
     return self._con.execute(

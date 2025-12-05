@@ -4,6 +4,10 @@ import re
 import sys
 import threading
 from typing import Iterable, List, NamedTuple, Optional, Tuple, TypedDict, cast
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+  from rclip.model import FeatureVector
 
 import numpy as np
 from tqdm import tqdm
@@ -85,7 +89,10 @@ class RClip:
     except Exception as ex:
       print("error computing features:", ex, file=sys.stderr)
       return
-    for path, meta, vector, image in cast(Iterable[tuple], zip(filtered_paths, metas, features, images)):
+    for path, meta, vector, image in cast(
+        Iterable[Tuple[str, ImageMeta, 'FeatureVector', Image.Image]],
+        zip(filtered_paths, metas, features, images)
+    ):
       hash_value = helpers.compute_image_hash(image)
       self._db.upsert_image(
         db.NewImage(filepath=path, modified_at=meta["modified_at"], size=meta["size"], vector=vector.tobytes(), hash=hash_value),
@@ -167,13 +174,13 @@ class RClip:
             existing_images_with_hash = self._db.get_images_by_hash(current_hash)
             
             # Find an entry where the file no longer exists (true rename, not a copy)
-            existing_image = None
+            existing_image_vector = None
             for img_entry in existing_images_with_hash:
               if not os.path.exists(img_entry["filepath"]):
-                existing_image = img_entry
+                existing_image_vector = img_entry["vector"]
                 break
             
-            if existing_image:
+            if existing_image_vector:
               # This is a renamed file - reuse the existing vector
               # DON'T remove the indexing flag from the old filepath - we want it to be marked as deleted
               # Create a new entry for the new filepath
@@ -182,14 +189,14 @@ class RClip:
                   filepath=filepath,
                   modified_at=meta["modified_at"],
                   size=meta["size"],
-                  vector=existing_image["vector"],
+                  vector=existing_image_vector,
                   hash=current_hash
                 ),
                 commit=False,
               )
               self._db.remove_indexing_flag(filepath, commit=False)
               continue
-          except (PIL.UnidentifiedImageError, Exception):
+          except PIL.UnidentifiedImageError:
             # If we can't read the image, fall through to normal indexing
             pass
 
